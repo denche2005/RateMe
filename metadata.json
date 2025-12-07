@@ -1,0 +1,8 @@
+{
+  "name": "RateMe",
+  "description": "A social rating network with anonymous 1–10 ratings, skill badges, and a TikTok-style feed. Features a dark neon aesthetic and AI-powered profile analysis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}

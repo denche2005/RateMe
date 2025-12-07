@@ -1,0 +1,239 @@
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>RateMe</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              theme: {
+                bg: 'var(--bg-primary)',
+                card: 'var(--bg-card)',
+                text: 'var(--text-primary)',
+                secondary: 'var(--text-secondary)',
+                accent: 'var(--accent)',
+                divider: 'var(--divider)',
+              },
+            },
+            backgroundImage: {
+              'brand-gradient': 'var(--brand-gradient)',
+              'brand-gradient-hover': 'var(--brand-gradient-hover)',
+            },
+            boxShadow: {
+              'soft-xl': '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              'soft-md': '0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06)',
+              'glow': '0 0 15px var(--glow-color)',
+            },
+            fontFamily: {
+              sans: ['Inter', 'sans-serif'],
+            },
+            animation: {
+              'spin-slow': 'spin 8s linear infinite',
+              'fade-in': 'fadeIn 0.3s ease-out forwards',
+              'pop-up': 'popUp 0.8s ease-out forwards',
+              'intro-logo-in': 'introLogoIn 1.2s cubic-bezier(0.22, 1, 0.36, 1) forwards',
+              'star-reveal': 'starReveal 0.8s cubic-bezier(0.34, 1.56, 0.64, 1) forwards',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0' },
+                '100%': { opacity: '1' },
+              },
+              popUp: {
+                '0%': { opacity: '0', transform: 'translate(-50%, 0) scale(0.5)' },
+                '20%': { opacity: '1', transform: 'translate(-50%, -40px) scale(1.2)' },
+                '100%': { opacity: '0', transform: 'translate(-50%, -80px) scale(1)' }
+              },
+              slideDownFade: {
+                '0%': { opacity: '0', transform: 'translate(-50%, -20px)' },
+                '100%': { opacity: '1', transform: 'translate(-50%, 0)' }
+              },
+              slideDown: {
+                 '0%': { opacity: '0', transform: 'translateY(-20px)' },
+                 '100%': { opacity: '1', transform: 'translateY(0)' }
+              },
+              slideUp: {
+                 '0%': { opacity: '0', transform: 'translateY(100%)' },
+                 '100%': { opacity: '1', transform: 'translateY(0)' }
+              },
+              introLogoIn: {
+                '0%': { opacity: '0', transform: 'scale(0.8) translateY(20px)' },
+                '100%': { opacity: '1', transform: 'scale(1) translateY(0)' }
+              },
+              starReveal: {
+                '0%': { opacity: '0', transform: 'scale(0) rotate(-180deg)' },
+                '100%': { opacity: '1', transform: 'scale(1) rotate(0deg)' }
+              }
+            }
+          }
+        }
+      }
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        /* DARK MODE (Default) */
+        --bg-primary: #0f1115; 
+        /* Updated: Lighter card background for better contrast against primary bg */
+        --bg-card: #21262d;    
+        --text-primary: #ffffff; 
+        --text-secondary: #94a3b8; 
+        --divider: #30363d;
+
+        /* Chat Colors Dark */
+        --msg-bg-other: #262626;
+        --msg-text-other: #ffffff;
+
+        /* DYNAMIC THEME VARIABLES (Defaults: NEON) */
+        --theme-primary: #3b82f6;
+        --theme-secondary: #06b6d4;
+        --accent: #3b82f6;
+        --accent-rgb: 59, 130, 246; 
+        --brand-gradient: linear-gradient(90deg, #06b6d4 0%, #3b82f6 100%);
+        --brand-gradient-hover: linear-gradient(90deg, #0891b2 0%, #2563eb 100%);
+        
+        --glow-color: rgba(59, 130, 246, 0.3);
+      }
+
+      .light-mode {
+        /* LIGHT MODE */
+        --bg-primary: #f8fafc; 
+        --bg-card: #ffffff;    
+        --text-primary: #0f172a; 
+        --text-secondary: #64748b; 
+        --divider: #e2e8f0;
+
+        /* Chat Colors Light */
+        --msg-bg-other: #f1f5f9;
+        --msg-text-other: #1e293b;
+      }
+
+      body {
+        background-color: var(--bg-primary);
+        color: var(--text-primary);
+        overscroll-behavior-y: none;
+        transition: background-color 0.3s ease, color 0.3s ease;
+      }
+
+      .no-scrollbar::-webkit-scrollbar {
+        display: none;
+      }
+      .no-scrollbar {
+        -ms-overflow-style: none;
+        scrollbar-width: none;
+      }
+
+      /* --- Star Slider Styling --- */
+      .star-slider {
+        -webkit-appearance: none;
+        width: 100%;
+        background: transparent;
+        cursor: pointer;
+        outline: none;
+        height: 32px;
+        margin: 0;
+        z-index: 10;
+        position: relative;
+      }
+
+      /* Webkit Thumb - Star Shape */
+      .star-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        height: 32px;
+        width: 32px;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' fill='white' stroke='none'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: contain;
+        margin-top: -12px; /* Center relative to track */
+        filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+        transition: transform 0.1s ease;
+        position: relative;
+        z-index: 20; 
+      }
+
+      .star-slider::-webkit-slider-thumb:active {
+        transform: scale(1.3) rotate(15deg);
+      }
+
+      /* Webkit Track */
+      .star-slider::-webkit-slider-runnable-track {
+        width: 100%;
+        height: 8px;
+        cursor: pointer;
+        background: transparent;
+        border-radius: 999px;
+        /* Background managed by React style */
+      }
+      
+      /* Firefox Thumb */
+      .star-slider::-moz-range-thumb {
+        height: 32px;
+        width: 32px;
+        background-color: transparent;
+        border: none;
+        background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z' fill='white' stroke='none'/%3E%3C/svg%3E");
+        background-size: contain;
+        background-repeat: no-repeat;
+        cursor: pointer;
+        position: relative;
+        z-index: 20;
+      }
+
+      /* Firefox Track */
+      .star-slider::-moz-range-track {
+        width: 100%;
+        height: 8px;
+        cursor: pointer;
+        background: transparent;
+        border-radius: 999px;
+      }
+
+      /* Generic Slider */
+      .neon-slider {
+         -webkit-appearance: none;
+         width: 100%;
+         background: transparent;
+         cursor: pointer;
+         outline: none;
+      }
+      .neon-slider::-webkit-slider-thumb {
+         -webkit-appearance: none;
+         height: 20px;
+         width: 20px;
+         border-radius: 50%;
+         background: white;
+         border: 2px solid var(--accent);
+         margin-top: -6px;
+      }
+      .neon-slider::-webkit-slider-runnable-track {
+         width: 100%;
+         height: 8px;
+         background: transparent;
+         border-radius: 999px;
+      }
+
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "recharts": "https://aistudiocdn.com/recharts@^2.12.0",
+    "recharts/": "https://aistudiocdn.com/recharts@^2.12.0/",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/"
+  }
+}
+</script>
+</head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>

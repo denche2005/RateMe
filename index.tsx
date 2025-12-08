@@ -1,7 +1,7 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
-import { MOCK_USERS, MOCK_POSTS, MOCK_COMMENTS, MOCK_NOTIFICATIONS, MOCK_CHATS, MOCK_MESSAGES } from './constants';
 import { User, Post, ViewState, Comment, Notification, ChatPreview, ChatMessage, BadgeType, UserListType, AppTheme } from './types';
 import { Feed } from './components/Feed';
 import { Profile } from './components/Profile';
@@ -17,12 +17,16 @@ import { StoreSheet } from './components/StoreSheet';
 import { PostInsightsSheet } from './components/PostInsightsSheet';
 import { AuthScreen } from './components/AuthScreen';
 import { AuthProvider, useAuth } from './services/AuthContext';
-import { getUserById } from './services/userService';
+import { getUserById, getAllUsers } from './services/userService';
 import { createRating } from './services/ratingService';
-import { createNotification } from './services/notificationService';
-import { getFeedPosts, getUserPosts, uploadImage, createPost, getPostById } from './services/postService';
+import { createNotification, getUserNotifications } from './services/notificationService';
+import { getFeedPosts, getUserPosts, uploadImage, createPost, getPostById, getUserReposts } from './services/postService';
+import { createComment, getPostComments, deleteComment, toggleCommentLike, getUserLikedComments } from './services/commentService';
+import { toggleSave, isPostSaved, getUserSavedPosts } from './services/savedService';
+import { toggleRepost, isPostReposted } from './services/repostService';
 import { recalculatePostRating, recalculateUserScore } from './services/recalculateService';
 import { PullToRefresh } from './components/PullToRefresh';
+import { subscribeToNotifications, subscribeToProfileUpdates } from './services/realtimeService';
 
 
 
@@ -336,15 +340,12 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
   const [currentView, setCurrentView] = useState<ViewState>('ONBOARDING');
   const [navigationStack, setNavigationStack] = useState<ViewState[]>([]);
 
-  // Data State - Merge authenticated user with mock users
-  const initialUsers = authenticatedUser
-    ? [authenticatedUser, ...MOCK_USERS.filter(u => u.id !== authenticatedUser.id)]
-    : MOCK_USERS;
-  const [users, setUsers] = useState<User[]>(initialUsers);
-  const [posts, setPosts] = useState<Post[]>(MOCK_POSTS);
-  const [comments, setComments] = useState<Comment[]>(MOCK_COMMENTS);
-  const [chatList, setChatList] = useState<ChatPreview[]>(MOCK_CHATS);
-  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>(MOCK_MESSAGES);
+  // Data State
+  const [users, setUsers] = useState<User[]>(authenticatedUser ? [authenticatedUser] : []);
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [chatList, setChatList] = useState<ChatPreview[]>([]);
+  const [messages, setMessages] = useState<Record<string, ChatMessage[]>>({});
 
   // Persistence - Use authenticated user ID
   const [viewingUserId, setViewingUserId] = useState<string | null>(null);
@@ -355,19 +356,41 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
   const [userCooldowns, setUserCooldowns] = useState<Record<string, number>>({});
 
   // Derived Users - Use authenticatedUser as currentUser when available
-  const currentUser = authenticatedUser || users.find(u => u.id === currentUserId) || users[0];
+  // useMemo ensures this recalculates when users array updates
+  const currentUser = useMemo(() => {
+    if (authenticatedUser) {
+      // Find the latest version of authenticatedUser in users array
+      return users.find(u => u.id === authenticatedUser.id) || authenticatedUser;
+    }
+    return users.find(u => u.id === currentUserId) || users[0];
+  }, [authenticatedUser, users, currentUserId]);
+
   const viewingUser = viewingUserId ? users.find(u => u.id === viewingUserId) || null : null;
 
   // New States for Saved and Reposts
-  const [savedPosts, setSavedPosts] = useState<Post[]>([]);
-  const [repostedPosts, setRepostedPosts] = useState<Post[]>([]);
+
+  const [savedPostIds, setSavedPostIds] = useState<string[]>([]); // IDs of posts user has saved
+  const [repostedPostIds, setRepostedPostIds] = useState<string[]>([]); // IDs of posts user has reposted
+  const [viewingUserReposts, setViewingUserReposts] = useState<Post[]>([]); // Reposts of the user being viewed
   const [activeChatTarget, setActiveChatTarget] = useState<string | null>(null);
+
+  // Fetch reposts when viewing another user
+  useEffect(() => {
+    if (viewingUserId) {
+      getUserReposts(viewingUserId).then(posts => {
+        console.log('[DEBUG] Fetched Reposts FULL:', JSON.stringify(posts, null, 2));
+        setViewingUserReposts(posts);
+      });
+    } else {
+      setViewingUserReposts([]);
+    }
+  }, [viewingUserId]);
 
   // Single Post Viewing State
   const [viewingPost, setViewingPost] = useState<Post | null>(null);
 
   // Notification State
-  const [notifications, setNotifications] = useState<Notification[]>(MOCK_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<Notification[]>([]);
   const [activeNotification, setActiveNotification] = useState<Notification | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -399,16 +422,7 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // --- Initialization & Theme Engine ---
-  useEffect(() => {
-    const initializedUsers = MOCK_USERS.map(user => {
-      const userPosts = MOCK_POSTS.filter(p => p.creatorId === user.id);
-      if (userPosts.length === 0) return user;
-      const totalScore = userPosts.reduce((acc, p) => acc + p.averageRating, 0);
-      const avgScore = totalScore / userPosts.length;
-      return { ...user, averageScore: avgScore, postsCount: userPosts.length };
-    });
-    setUsers(initializedUsers);
-  }, []);
+
 
   // Ensure authenticated user is in users array
   useEffect(() => {
@@ -486,9 +500,132 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
     };
     root.style.setProperty('--accent-rgb', hexToRgb(themeConfig.accent));
   }, [appTheme]);
+  // Real-time notifications subscription
+  useEffect(() => {
+    if (authenticatedUser) {
+      const unsubscribe = subscribeToNotifications(
+        authenticatedUser.id,
+        async (notification) => {
+          console.log('[APP] New notification received:', notification);
+
+          // Show toast message
+          const message = notification.type === 'RATING'
+            ? `${notification.emoji} ${notification.raterName} rated your post!`
+            : notification.type === 'SAVED'
+              ? `${notification.emoji} ${notification.raterName} saved your post!`
+              : notification.type === 'REPOSTED'
+                ? `${notification.emoji} ${notification.raterName} reposted your post!`
+                : notification.type === 'REPLY'
+                  ? `${notification.emoji} ${notification.raterName} replied to you!`
+                  : notification.type === 'COMMENT'
+                    ? `${notification.emoji} ${notification.raterName} commented on your post!`
+                    : `${notification.emoji} ${notification.raterName} described you!`;
+
+          setToastMessage(message);
+
+          // Add to notifications list
+          setNotifications(prev => [notification, ...prev]);
+
+          // ✅ INSTANT UPDATE: Reload affected data
+          if ((notification.type === 'RATING' || notification.type === 'COMMENT' || notification.type === 'REPLY') && notification.postId) {
+            // Post rating/comment → Reload the post with new average/count
+            const updatedPost = await getPostById(notification.postId);
+            if (updatedPost) {
+              console.log('[REALTIME] Post updated:', updatedPost);
+              setPosts(prev => prev.map(p => p.id === notification.postId ? updatedPost : p));
+            }
+
+
+            // Reload own profile (averageScore updated)
+            // Wait for Supabase trigger to finish updating average_score
+            await new Promise(resolve => setTimeout(resolve, 300));
+            const updatedProfile = await getUserById(authenticatedUser.id);
+            if (updatedProfile) {
+              console.log('[REALTIME] Profile updated, new score:', updatedProfile.averageScore);
+              setUsers(prev => prev.map(u => u.id === authenticatedUser.id ? updatedProfile : u));
+            }
+          } else if (notification.type === 'DESCRIBED') {
+            // Describe Me → Reload profile with new badges
+            const updatedProfile = await getUserById(authenticatedUser.id);
+            if (updatedProfile) {
+              console.log('[REALTIME] Profile updated, new badges:', updatedProfile.badgeAverages);
+              setUsers(prev => prev.map(u => u.id === authenticatedUser.id ? updatedProfile : u));
+            }
+          }
+        }
+      );
+
+      return unsubscribe;
+    }
+  }, [authenticatedUser]);
+
+  // Real-time profile updates subscription (for badge averages)
+  useEffect(() => {
+    if (authenticatedUser) {
+      const unsubscribe = subscribeToProfileUpdates(
+        authenticatedUser.id,
+        async (updatedProfile) => {
+          console.log('[APP] Profile updated via realtime:', updatedProfile.badge_averages);
+
+          // Reload full user data
+          const updatedUser = await getUserById(authenticatedUser.id);
+          if (updatedUser) {
+            setUsers(prev => prev.map(u => u.id === authenticatedUser.id ? updatedUser : u));
+          }
+        }
+      );
+
+      return unsubscribe;
+    }
+  }, [authenticatedUser]);
+
+  // Load saved posts and reposts IDs
+  useEffect(() => {
+    const loadSavedAndRepostedState = async () => {
+      if (!authenticatedUser) return;
+
+      const savedIds = await getUserSavedPosts(authenticatedUser.id);
+      setSavedPostIds(savedIds);
+      console.log('[SAVED] Loaded saved posts:', savedIds.length);
+
+      const repostedIds = await getUserReposts(authenticatedUser.id);
+      setRepostedPostIds(repostedIds);
+      console.log('[REPOST] Loaded reposts:', repostedIds.length);
+    };
+
+    loadSavedAndRepostedState();
+  }, [authenticatedUser]);
 
   const calculateMultiplier = (streak: number) => 1 + (streak * 0.05);
+  // Load notifications from Supabase
+  useEffect(() => {
+    if (authenticatedUser) {
+      const loadNotifications = async () => {
+        console.log('[NOTIFICATIONS] Loading from Supabase...');
+        const realNotifs = await getUserNotifications(authenticatedUser.id);
+        console.log('[NOTIFICATIONS] Loaded', realNotifs.length, 'notifications');
+        setNotifications(realNotifs);
+      };
+      loadNotifications();
+    }
+  }, [authenticatedUser, currentView]); // Reload when view changes to prevent disappearing
 
+  // Load all users from Supabase for Global Search and notifications
+  useEffect(() => {
+    const loadAllUsers = async () => {
+      console.log('[USERS] Loading all users from Supabase...');
+      const allUsers = await getAllUsers();
+      console.log('[USERS] Loaded', allUsers.length, 'users');
+
+      // Merge with existing users, avoiding duplicates
+      setUsers(prev => {
+        const existingIds = new Set(prev.map(u => u.id));
+        const newUsers = allUsers.filter(u => !existingIds.has(u.id));
+        return [...prev, ...newUsers];
+      });
+    };
+    loadAllUsers();
+  }, []); // Only run once at startup
   const awardCoins = (userId: string, baseAmount: number, reason: string) => {
     setUsers(prev => prev.map(u => {
       if (u.id === userId) {
@@ -528,96 +665,110 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
     awardCoins('me', streakReward.points, 'Streak Claimed');
   };
 
-  const applyRatingToUser = (targetUserId: string, score: number, badges?: Record<string, number>) => {
-    setUsers(prevUsers => prevUsers.map(u => {
-      if (u.id === targetUserId) {
-        const newTotalRatings = u.totalRatings + 1;
-        const newBadgeAverages = { ...u.badgeAverages };
-        if (badges) {
-          Object.entries(badges).forEach(([badgeName, badgeScore]) => {
-            const currentBadgeAvg = newBadgeAverages[badgeName as BadgeType] || 0;
-            const newAvg = ((currentBadgeAvg * u.totalRatings) + badgeScore) / newTotalRatings;
-            newBadgeAverages[badgeName as BadgeType] = newAvg;
-          });
+  const applyRatingToUser = async (targetUserId: string, score: number, badges?: Record<string, number>) => {
+    // Save to Supabase
+    try {
+      const result = await createRating({
+        raterId: currentUserId,
+        targetId: targetUserId,
+        targetType: 'user',
+        value: score,
+        badges: badges as Partial<Record<BadgeType, number>>,
+      });
+
+      if (result.success) {
+        console.log('[BADGE_AVERAGES] Rating saved successfully');
+
+        // Create notification for Describe Me
+        const notifResult = await createNotification({
+          type: 'DESCRIBED',
+          raterId: currentUserId,
+          raterName: currentUser.displayName,
+          score: score,
+          emoji: '✨',
+          badgeScores: badges as Record<BadgeType, number>,
+          targetUserId: targetUserId, // Pass targetUserId for DESCRIBED type
+        } as any);
+
+        if (notifResult) {
+          console.log('[NOTIFICATION] Describe Me notification created successfully');
+        } else {
+          console.error('[NOTIFICATION] Failed to create Describe Me notification');
         }
-        return { ...u, totalRatings: newTotalRatings, badgeAverages: newBadgeAverages };
+
+        // Reload the target user's profile from Supabase to get updated badge_averages
+        const updatedUser = await getUserById(targetUserId);
+        if (updatedUser) {
+          console.log('[BADGE_AVERAGES] Reloaded user with badges:', updatedUser.badgeAverages);
+          setUsers(prev => prev.map(u => u.id === targetUserId ? updatedUser : u));
+        }
+      } else {
+        console.warn('[BADGE_AVERAGES] Failed to save rating:', result.error);
       }
-      return u;
-    }));
+    } catch (error) {
+      console.error('[BADGE_AVERAGES] Error saving rating:', error);
+    }
+
     setUserCooldowns(prev => ({ ...prev, [targetUserId]: Date.now() }));
   };
 
   const handleFeedRate = async (post: Post, score: number) => {
-    const previousRating = userPostRatings[post.id];
-
-    // Save rating to Supabase
-    if (!previousRating) {
-      try {
-        const result = await createRating({
-          raterId: currentUserId,
-          targetId: post.id,
-          targetType: 'post',
-          value: score, // Keep decimal value (0.5, 1.0, 1.5, etc.)
-        });
-
-        if (result.success) {
-          // TODO: Fix notification system to include targetUserId
-
-          // Reload creator profile to get updated averageScore
-          const creator = users.find(u => u.id === post.creatorId);
-          if (creator) {
-            const updatedCreator = await getUserById(creator.id);
-            if (updatedCreator) {
-              setUsers(prev => prev.map(u => u.id === creator.id ? updatedCreator : u));
-            }
-          }
-        } else {
-          console.warn('Rating failed (post may not exist in DB):', result.error);
-        }
-      } catch (error) {
-        console.error('Error saving rating:', error);
-      }
-    }
-
-    // Update local state for immediate UI feedback
-    setPosts(prevPosts => {
-      const updatedPosts = prevPosts.map(p => {
-        if (p.id === post.id) {
-          let newAvg = 0;
-          let newCount = p.ratingCount;
-
-          if (previousRating !== undefined) {
-            const totalScore = (p.averageRating * p.ratingCount);
-            newAvg = (totalScore - previousRating + score) / p.ratingCount;
-          } else {
-            newCount = p.ratingCount + 1;
-            newAvg = ((p.averageRating * p.ratingCount) + score) / newCount;
-          }
-
-          // SYNC SINGLE VIEWING POST IF OPEN
-          if (viewingPost && viewingPost.id === post.id) {
-            setViewingPost({ ...p, averageRating: newAvg, ratingCount: newCount });
-          }
-
-          return { ...p, averageRating: newAvg, ratingCount: newCount };
-        }
-        return p;
+    // Save rating to Supabase (UPSERT allows re-rating)
+    try {
+      const result = await createRating({
+        raterId: currentUserId,
+        targetId: post.id,
+        targetType: 'post',
+        value: score, // Keep decimal value (0.5, 1.0, 1.5, etc.)
       });
 
-      return updatedPosts;
-    });
+      if (result.success) {
+        await createNotification({
+          type: 'RATING',
+          raterId: currentUserId,
+          raterName: currentUser.displayName,
+          score: score,
+          emoji: score >= 4 ? '🔥' : score >= 3 ? '👍' : '⭐',
+          postId: post.id,
+          postMediaUrl: post.mediaUrl,
+        });
 
-    if (previousRating === undefined) {
-      const creator = users.find(u => u.id === post.creatorId);
-      if (creator) {
-        setUsers(prev => prev.map(u => {
-          if (u.id === creator.id) {
-            const mult = calculateMultiplier(u.streakDays || 0);
-            return { ...u, coins: u.coins + Math.floor(5 * mult) };
+        // ✅ INSTANT UPDATE: Reload post with new average_rating from Supabase
+        const updatedPost = await getPostById(post.id);
+        if (updatedPost) {
+          console.log('[POST_RATING] Post reloaded, new average:', updatedPost.averageRating);
+          setPosts(prev => prev.map(p => p.id === post.id ? updatedPost : p));
+
+          // Update viewing post if open
+          if (viewingPost && viewingPost.id === post.id) {
+            setViewingPost(updatedPost);
           }
-          return u;
-        }));
+        }
+
+
+        // ✅ INSTANT UPDATE: Reload creator profile with new averageScore
+        // Wait for Supabase trigger to finish updating average_score
+        await new Promise(resolve => setTimeout(resolve, 300));
+        const creator = users.find(u => u.id === post.creatorId);
+        if (creator) {
+          const updatedCreator = await getUserById(creator.id);
+          if (updatedCreator) {
+            console.log('[POST_RATING] Creator reloaded, new score:', updatedCreator.averageScore);
+            setUsers(prev => prev.map(u => u.id === creator.id ? updatedCreator : u));
+          }
+        }
+      } else {
+        console.warn('[POST_RATING] Failed:', result.error);
       }
+    } catch (error) {
+      console.error('[POST_RATING] Error:', error);
+    }
+
+    // Update local userPostRatings map
+    setUserPostRatings(prev => ({ ...prev, [post.id]: score }));
+
+    // Award coins only on first rating
+    if (!userPostRatings[post.id]) {
       awardCoins(currentUserId, 10, 'Rated Post');
 
       // --- NEW STREAK LOGIC: TRIGGER ONLY ON FIRST RATING OF SESSION ---
@@ -637,6 +788,169 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
 
     setUserPostRatings(prev => ({ ...prev, [post.id]: score }));
   };
+
+  // ================================================
+  // FEED FEATURES HANDLERS
+  // ================================================
+
+  const handleSaveClick = async (post: Post) => {
+    try {
+      // 1. Optimistic UI Update (Immediate feedback)
+      const isCurrentlySaved = savedPostIds.includes(post.id);
+      const newIsSaved = !isCurrentlySaved;
+
+      if (newIsSaved) {
+        setSavedPostIds(prev => [...prev, post.id]);
+        setToastMessage('📌 Post saved!');
+
+        // Optimistic Counter Update
+        setPosts(prev => prev.map(p =>
+          p.id === post.id
+            ? { ...p, saveCount: (p.saveCount || 0) + 1 }
+            : p
+        ));
+      } else {
+        setSavedPostIds(prev => prev.filter(id => id !== post.id));
+        setToastMessage('Post unsaved');
+
+        // Optimistic Counter Update
+        setPosts(prev => prev.map(p =>
+          p.id === post.id
+            ? { ...p, saveCount: Math.max((p.saveCount || 0) - 1, 0) }
+            : p
+        ));
+      }
+
+      // 2. Perform Backend Action
+      const isSaved = await toggleSave(post.id, currentUserId);
+      console.log('[SAVE] Toggle result:', isSaved, 'for post:', post.id);
+
+      // 3. Sync Counters (Background)
+      // Wait for trigger to update saves_count
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Reload post to get updated saves_count
+      const updatedPost = await getPostById(post.id);
+
+      if (updatedPost) {
+        // Force update by creating new array
+        setPosts(prev => {
+          const newPosts = prev.map(p => p.id === post.id ? updatedPost : p);
+          return newPosts;
+        });
+      }
+
+      // Create notification if saving someone else's post
+      if (isSaved && post.creatorId !== currentUserId) {
+        await createNotification({
+          type: 'SAVED',
+          raterId: currentUserId,
+          raterName: currentUser.displayName,
+          score: 0,
+          emoji: '🔖',
+          postId: post.id,
+          postMediaUrl: post.mediaUrl,
+        });
+      }
+    } catch (error) {
+      console.error('Error saving post:', error);
+      // Revert optimistic update on error
+      const isCurrentlySaved = savedPostIds.includes(post.id);
+      if (isCurrentlySaved) {
+        setSavedPostIds(prev => prev.filter(id => id !== post.id));
+      } else {
+        setSavedPostIds(prev => [...prev, post.id]);
+      }
+    }
+  };
+
+  const handleRepostClick = async (post: Post) => {
+    try {
+      // 1. Optimistic UI Update (Immediate feedback)
+      const isCurrentlyReposted = repostedPostIds.includes(post.id);
+      const newIsReposted = !isCurrentlyReposted;
+
+      if (newIsReposted) {
+        setRepostedPostIds(prev => [...prev, post.id]);
+        setToastMessage('🔄 Post reposted!');
+
+        // Optimistic Counter Update
+        setPosts(prev => prev.map(p =>
+          p.id === post.id
+            ? { ...p, repostCount: (p.repostCount || 0) + 1 }
+            : p
+        ));
+      } else {
+        setRepostedPostIds(prev => prev.filter(id => id !== post.id));
+        setToastMessage('Post removed from reposts');
+
+        // Optimistic Counter Update
+        setPosts(prev => prev.map(p =>
+          p.id === post.id
+            ? { ...p, repostCount: Math.max((p.repostCount || 0) - 1, 0) }
+            : p
+        ));
+      }
+
+      // 2. Perform Backend Action
+      const isReposted = await toggleRepost(post.id, currentUserId);
+      console.log('[REPOST] Toggle result:', isReposted, 'for post:', post.id);
+
+      // 3. Sync Counters (Background)
+      // Wait for trigger to update reposts_count
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      // Reload post to get updated reposts_count
+      const updatedPost = await getPostById(post.id);
+
+      if (updatedPost) {
+        // Force update by creating new array
+        setPosts(prev => {
+          const newPosts = prev.map(p => p.id === post.id ? updatedPost : p);
+          return newPosts;
+        });
+      }
+
+      // Create notification if reposting someone else's post
+      if (isReposted && post.creatorId !== currentUserId) {
+        await createNotification({
+          type: 'REPOSTED',
+          raterId: currentUserId,
+          raterName: currentUser.displayName,
+          score: 0,
+          emoji: '🔄',
+          postId: post.id,
+          postMediaUrl: post.mediaUrl,
+        });
+      }
+    } catch (error) {
+      console.error('Error reposting:', error);
+      // Revert optimistic update on error
+      const isCurrentlyReposted = repostedPostIds.includes(post.id);
+      if (isCurrentlyReposted) {
+        setRepostedPostIds(prev => prev.filter(id => id !== post.id));
+      } else {
+        setRepostedPostIds(prev => [...prev, post.id]);
+      }
+    }
+  };
+
+  const handleCommentClick = async (post: Post) => {
+    setActiveCommentPostId(post.id);
+    // Fetch comments for this post
+    const fetchedComments = await getPostComments(post.id);
+    setComments(prev => {
+      // Remove existing comments for this post and add new ones to avoid duplicates
+      const otherComments = prev.filter(c => c.postId !== post.id);
+      return [...otherComments, ...fetchedComments];
+    });
+
+    // Fetch liked comments for this user
+    const commentIds = fetchedComments.map(c => c.id);
+    const likedIds = await getUserLikedComments(currentUserId, commentIds);
+    setLikedCommentIds(likedIds);
+  };
+
 
   const handleNavigate = (view: ViewState) => {
     setNavigationStack(prev => [...prev, currentView]);
@@ -670,7 +984,9 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
     handleNavigate('PROFILE');
   };
 
-  const handlePostClick = (post: Post) => {
+  const handlePostClick = async (post: Post) => {
+    // Load comments for this post before navigating
+    await handleCommentClick(post);
     setViewingPost(post);
     handleNavigate('POST_DETAILS');
   };
@@ -765,19 +1081,21 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
     setToastMessage(`Sent to ${selectedIds.length} ${selectedIds.length === 1 ? 'person' : 'people'}! ✈️`);
   };
 
-  const handleLikeComment = (commentId: string) => {
+  const handleLikeComment = async (commentId: string) => {
+    const isLiked = await toggleCommentLike(commentId, currentUserId);
+
     setComments(prev => prev.map(c => {
       if (c.id === commentId) {
-        const alreadyLiked = likedCommentIds.includes(commentId);
-        return { ...c, likes: alreadyLiked ? c.likes - 1 : c.likes + 1 };
+        return { ...c, likes: isLiked ? c.likes + 1 : Math.max(0, c.likes - 1) };
       }
       return c;
     }));
+
     setLikedCommentIds(prev => {
-      if (prev.includes(commentId)) {
-        return prev.filter(id => id !== commentId);
-      } else {
+      if (isLiked) {
         return [...prev, commentId];
+      } else {
+        return prev.filter(id => id !== commentId);
       }
     });
   };
@@ -796,15 +1114,7 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
       });
 
       if (result.success) {
-        // Create DESCRIBED notification
-        await createNotification(targetUser.id, {
-          type: 'DESCRIBED',
-          raterId: currentUserId,
-          raterName: currentUser.displayName,
-          score: 0,
-          emoji: '✨',
-          badgeScores: badges as any,
-        } as any);
+        // TODO: Fix notification system later
 
         // Reload target user to get updated badge averages
         const updatedTarget = await getUserById(targetUser.id);
@@ -832,18 +1142,67 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
     setCurrentView('QUICK_RATE');
   };
 
-  const handleAddComment = (text: string) => {
+  const handleAddComment = async (text: string) => {
     if (!activeCommentPostId) return;
-    const newComment: Comment = {
-      id: `c_${Date.now()}`,
-      postId: activeCommentPostId,
-      userId: currentUser.id,
-      text: text,
-      timestamp: Date.now(),
-      likes: 0
-    };
-    setComments([newComment, ...comments]);
+
+    const newComment = await createComment(activeCommentPostId, currentUserId, text);
+
+    if (newComment) {
+      setComments(prev => [...prev, newComment]);
+
+      // Wait for database trigger to update count
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Reload the post to get the updated comment count from database
+      const updatedPost = await getPostById(activeCommentPostId);
+      if (updatedPost) {
+        setPosts(prev => prev.map(p =>
+          p.id === activeCommentPostId ? updatedPost : p
+        ));
+      }
+
+      // NOTIFICATIONS LOGIC
+      const post = posts.find(p => p.id === activeCommentPostId);
+      if (post) {
+        // 1. Check for mentions (@username)
+        const mentionMatch = text.match(/@(\w+)/);
+        if (mentionMatch) {
+          const mentionedUsername = mentionMatch[1];
+          const mentionedUser = users.find(u => u.username === mentionedUsername);
+
+          if (mentionedUser && mentionedUser.id !== currentUserId) {
+            await createNotification({
+              type: 'REPLY',
+              raterId: currentUserId,
+              raterName: currentUser.displayName,
+              score: 0,
+              emoji: '💬',
+              postId: post.id,
+              postMediaUrl: post.mediaUrl,
+              targetUserId: mentionedUser.id,  // Pass targetUserId for mentions
+            } as any);
+          }
+        }
+
+        // 2. Notify post owner (if not self)
+        if (post.creatorId !== currentUserId) {
+          await createNotification({
+            type: 'COMMENT',
+            raterId: currentUserId,
+            raterName: currentUser.displayName,
+            score: 0,
+            emoji: '💬',
+            postId: post.id,
+            postMediaUrl: post.mediaUrl,
+          });
+        }
+      }
+    } else {
+      setToastMessage('Failed to post comment');
+    }
   };
+
+
 
   const triggerFileUpload = () => {
     fileInputRef.current?.click();
@@ -918,309 +1277,326 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
   const isChatOpen = currentView === 'CHATS' && activeChatTarget !== null;
   const showNav = !isChatOpen && ['FEED', 'SEARCH', 'PROFILE', 'CHATS', 'POST_DETAILS'].includes(currentView);
 
+  // Derive saved and reposted posts for the current user
+  // TODO: In a real app, we should fetch these from DB if they are not in the current 'posts' feed
+  const savedPosts = posts.filter(p => savedPostIds.includes(p.id));
+  const repostedPosts = posts.filter(p => repostedPostIds.includes(p.id));
+
   return (
     <div className={`w-full h-full ${themeMode === 'light' ? 'light-mode' : ''}`}>
 
-      {showIntro && <IntroAnimation onFinish={() => setShowIntro(false)} />}
-
-      <div className="fixed inset-0 w-full h-full bg-theme-bg text-theme-text font-sans flex flex-col overflow-hidden select-none transition-colors duration-300">
-
-        <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
-
-        <RatingFlash score={lastRating} />
-
-        <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
-
-        <NotificationToast
-          notification={activeNotification}
-          currentUserId={currentUser.id}
-          userFriends={currentUser.friends || []}
-          onClose={() => setActiveNotification(null)}
-          onRateBack={handleRateBack}
-        />
-
-        {showStreakModal && (
-          <DailyStreakModal
-            day={streakReward.day}
-            reward={streakReward.points}
-            onClose={handleClaimStreak}
-          />
-        )}
-
-        {confirmPaymentModal && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in p-6">
-            <div className="bg-theme-card w-full max-w-sm rounded-3xl p-6 border border-theme-accent/30 shadow-2xl text-center">
-              <div className="text-4xl mb-3">⏳</div>
-              <h2 className="text-xl font-black text-theme-text mb-2">Cooldown Active</h2>
-              <p className="text-theme-secondary text-sm mb-6 leading-relaxed">
-                You can only rate this person for free once a week.
-                Wait <b>7 days</b> or pay to rate now.
-              </p>
-              <div className="flex flex-col gap-3">
-                <NeonButton onClick={confirmPaymentModal.onConfirm} className="w-full">
-                  Pay {confirmPaymentModal.cost} RateCoins
-                </NeonButton>
-                <button
-                  onClick={() => setConfirmPaymentModal(null)}
-                  className="text-theme-secondary font-bold text-sm hover:text-theme-text"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {isStoreOpen && (
-          <StoreSheet
-            balance={currentUser.coins}
-            onClose={() => setIsStoreOpen(false)}
-            onBuyItem={handleBuyStoreItem}
-          />
-        )}
-
-        {activeInsightPost && (
-          <PostInsightsSheet
-            post={activeInsightPost}
-            onClose={() => setActiveInsightPost(null)}
-            users={users}
-          />
-        )}
-
-        {viewingRatingSummary && viewingRatingSummary.badgeScores && (
-          <RatingSummaryModal
-            raterName={viewingRatingSummary.raterName}
-            badgeScores={viewingRatingSummary.badgeScores}
-            onClose={() => setViewingRatingSummary(null)}
-          />
-        )}
-
-        <div className={`flex-1 w-full relative overflow-hidden ${showNav ? 'pb-[60px]' : ''}`}>
-          {currentView === 'ONBOARDING' && !showIntro && (
-            <OnboardingView onConnectContacts={handleConnectContacts} onSkip={() => setCurrentView('FEED')} />
-          )}
-
-          {currentView === 'QUICK_RATE' && (
-            <QuickRateView
-              queue={quickRateQueue}
-              onRate={(u) => handleRate({ type: 'user', data: u })}
-              onSkipUser={() => setQuickRateQueue(prev => prev.slice(1))}
-              onFinish={() => handleNavigate('FEED')}
-            />
-          )}
-
-          {currentView === 'FEED' && (
-            <Feed
-              posts={posts}
-              users={users}
-              comments={comments}
-              ratingScale={ratingScale}
-              onRate={handleFeedRate}
-              onDetailedRate={(post) => handleRate({ type: 'post', data: post })}
-              onProfileClick={handleProfileClick}
-              onCommentClick={(post) => setActiveCommentPostId(post.id)}
-              onShareClick={(post) => setActiveSharePostId(post.id)}
-              onSaveClick={handleSavePost}
-              onRepostClick={handleRepost}
-              onAnalyticsClick={setActiveInsightPost}
-              currentUser={currentUser}
-            />
-          )}
-
-          {currentView === 'POST_DETAILS' && viewingPost && (
-            <Feed
-              posts={[viewingPost]}
-              users={users}
-              comments={comments}
-              ratingScale={ratingScale}
-              onRate={handleFeedRate}
-              onDetailedRate={(post) => handleRate({ type: 'post', data: post })}
-              onProfileClick={handleProfileClick}
-              onCommentClick={(post) => setActiveCommentPostId(post.id)}
-              onShareClick={(post) => setActiveSharePostId(post.id)}
-              onSaveClick={handleSavePost}
-              onRepostClick={handleRepost}
-              onAnalyticsClick={setActiveInsightPost}
-              onBack={handleBack}
-              currentUser={currentUser}
-            />
-          )}
-
-          {currentView === 'SEARCH' && (
-            <SearchView
-              users={users}
-              onProfileClick={handleProfileClick}
-              onBack={handleBack}
-            />
-          )}
-
-          {currentView === 'CHATS' && (
-            <ChatsView
-              users={users}
-              notifications={notifications}
-              posts={posts}
-              chatList={chatList}
-              messages={messages}
-              setMessages={setMessages}
-              setChatList={setChatList} // PASSED HERE
-              onBack={handleBack}
-              activeChatId={activeChatTarget}
-              onOpenChat={(id) => setActiveChatTarget(id)}
-              onProfileClick={handleProfileClick}
-              onPostClick={handlePostClick}
-              onNotificationClick={(n) => setViewingRatingSummary(n)}
-              userResponse={dailyPollResponse}
-              onRespond={(resp) => {
-                // Handle Coin Reward Logic for Daily Poll
-                if (!dailyPollResponse) {
-                  setDailyPollResponse(resp);
-                  awardCoins('me', 50, 'Daily Poll Answered');
-                } else {
-                  setDailyPollResponse(resp);
-                }
-              }}
-            />
-          )}
-
-          {currentView === 'PROFILE' && (
-            <Profile
-              user={viewingUser || currentUser}
-              isOwnProfile={!viewingUser || viewingUser.id === currentUser.id}
-              allPosts={posts}
-              savedPosts={savedPosts}
-              repostedPosts={viewingUser ? [] : repostedPosts}
-              onRateUser={() => handleRate({ type: 'user', data: viewingUser || currentUser })}
-              onBack={handleBack}
-              onEditProfile={() => setIsEditingProfile(true)}
-              onOpenSettings={() => setIsSettingsOpen(true)}
-              onOpenStore={() => setIsStoreOpen(true)}
-              onChat={() => {
-                if (viewingUser) {
-                  setActiveChatTarget(viewingUser.id);
-                  handleNavigate('CHATS');
-                } else {
-                  handleNavigate('CHATS');
-                }
-              }}
-              onFollow={() => handleFollowUser((viewingUser || currentUser).id)}
-              onFollowersClick={() => handleOpenUserList('FOLLOWERS', viewingUser || currentUser)}
-              onFollowingClick={() => handleOpenUserList('FOLLOWING', viewingUser || currentUser)}
-              onPostClick={handlePostClick}
-              theme={themeMode}
-              onToggleTheme={() => setThemeMode(prev => prev === 'dark' ? 'light' : 'dark')}
-              viewerFriends={currentUser.friends}
-            />
-          )}
+      {/* Safety check for currentUser */}
+      {!currentUser ? (
+        <div className="flex items-center justify-center h-full bg-theme-bg text-theme-text">
+          Loading...
         </div>
+      ) : (
+        <>
+          {showIntro && <IntroAnimation onFinish={() => setShowIntro(false)} />}
 
-        {ratingTarget && (
-          <RatingModal
-            targetName={ratingTarget.type === 'user' ? (ratingTarget.data as User).displayName : 'this post'}
-            onClose={() => setRatingTarget(null)}
-            onSubmit={submitRating}
-          />
-        )}
+          <div className="fixed inset-0 w-full h-full bg-theme-bg text-theme-text font-sans flex flex-col overflow-hidden select-none transition-colors duration-300">
 
-        {isEditingProfile && (
-          <EditProfileModal
-            user={currentUser}
-            onClose={() => setIsEditingProfile(false)}
-            onSave={(updatedUser) => {
-              setUsers(prev => prev.map(u => u.id === currentUser.id ? updatedUser : u));
-            }}
-          />
-        )}
+            <input type="file" ref={fileInputRef} className="hidden" accept="image/*" onChange={handleFileChange} />
 
-        {isSettingsOpen && (
-          <SettingsView
-            currentScale={ratingScale}
-            isPrivate={currentUser.isPrivate || false}
-            onScaleChange={setRatingScale}
-            onPrivacyChange={(val) => {
-              setUsers(prev => prev.map(u => u.id === currentUser.id ? { ...u, isPrivate: val } : u));
-            }}
-            onClose={() => setIsSettingsOpen(false)}
-            currentTheme={appTheme}
-            onThemeChange={setAppTheme}
-            isDarkMode={themeMode === 'dark'}
-            onToggleDarkMode={() => setThemeMode(prev => prev === 'dark' ? 'light' : 'dark')}
-            onLogout={() => {
-              setToastMessage("Logged out (Mock)");
-              setIsSettingsOpen(false);
-            }}
-          />
-        )}
+            <RatingFlash score={lastRating} />
 
-        {activeCommentPostId && (
-          <CommentsSheet
-            comments={comments.filter(c => c.postId === activeCommentPostId)}
-            users={users}
-            onClose={() => setActiveCommentPostId(null)}
-            onAddComment={handleAddComment}
-            onLikeComment={handleLikeComment}
-            likedCommentIds={likedCommentIds}
-          />
-        )}
+            <Toast message={toastMessage} onClose={() => setToastMessage(null)} />
 
-        {activeSharePostId && (
-          <ShareSheet
-            users={users}
-            onClose={() => setActiveSharePostId(null)}
-            onSend={handleShareSend}
-          />
-        )}
-
-        {userListTarget && (
-          <UserListSheet
-            type={userListTarget.type}
-            users={userListTarget.users}
-            onClose={() => setUserListTarget(null)}
-            onUserClick={handleProfileClick}
-          />
-        )}
-
-        {showNav && (
-          <div className="absolute bottom-0 w-full h-[60px] bg-theme-bg/95 backdrop-blur-md border-t border-theme-text/5 flex justify-around items-center px-6 z-40 pointer-events-auto">
-            <NavButton
-              active={currentView === 'FEED'}
-              icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'FEED' ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'FEED' ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>}
-              onClick={() => handleNavigate('FEED')}
+            <NotificationToast
+              notification={activeNotification}
+              currentUserId={currentUser.id}
+              userFriends={currentUser.friends || []}
+              onClose={() => setActiveNotification(null)}
+              onRateBack={handleRateBack}
             />
 
-            <NavButton
-              active={currentView === 'SEARCH'}
-              icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>}
-              onClick={() => handleNavigate('SEARCH')}
-            />
+            {showStreakModal && (
+              <DailyStreakModal
+                day={streakReward.day}
+                reward={streakReward.points}
+                onClose={handleClaimStreak}
+              />
+            )}
 
-            <div className="relative top-0">
-              <button
-                className="w-10 h-10 rounded-full bg-brand-gradient shadow-soft-xl flex items-center justify-center text-white transform transition-transform active:scale-95 border border-white/20"
-                onClick={triggerFileUpload}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                </svg>
-              </button>
+            {confirmPaymentModal && (
+              <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in p-6">
+                <div className="bg-theme-card w-full max-w-sm rounded-3xl p-6 border border-theme-accent/30 shadow-2xl text-center">
+                  <div className="text-4xl mb-3">⏳</div>
+                  <h2 className="text-xl font-black text-theme-text mb-2">Cooldown Active</h2>
+                  <p className="text-theme-secondary text-sm mb-6 leading-relaxed">
+                    You can only rate this person for free once a week.
+                    Wait <b>7 days</b> or pay to rate now.
+                  </p>
+                  <div className="flex flex-col gap-3">
+                    <NeonButton onClick={confirmPaymentModal.onConfirm} className="w-full">
+                      Pay {confirmPaymentModal.cost} RateCoins
+                    </NeonButton>
+                    <button
+                      onClick={() => setConfirmPaymentModal(null)}
+                      className="text-theme-secondary font-bold text-sm hover:text-theme-text"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {isStoreOpen && (
+              <StoreSheet
+                balance={currentUser.coins}
+                onClose={() => setIsStoreOpen(false)}
+                onBuyItem={handleBuyStoreItem}
+              />
+            )}
+
+            {activeInsightPost && (
+              <PostInsightsSheet
+                post={activeInsightPost}
+                onClose={() => setActiveInsightPost(null)}
+                users={users}
+              />
+            )}
+
+            {viewingRatingSummary && viewingRatingSummary.badgeScores && (
+              <RatingSummaryModal
+                raterName={viewingRatingSummary.raterName}
+                badgeScores={viewingRatingSummary.badgeScores}
+                onClose={() => setViewingRatingSummary(null)}
+              />
+            )}
+
+            <div className={`flex-1 w-full relative overflow-hidden ${showNav ? 'pb-[60px]' : ''}`}>
+              {currentView === 'ONBOARDING' && !showIntro && (
+                <OnboardingView onConnectContacts={handleConnectContacts} onSkip={() => setCurrentView('FEED')} />
+              )}
+
+              {currentView === 'QUICK_RATE' && (
+                <QuickRateView
+                  queue={quickRateQueue}
+                  onRate={(u) => handleRate({ type: 'user', data: u })}
+                  onSkipUser={() => setQuickRateQueue(prev => prev.slice(1))}
+                  onFinish={() => handleNavigate('FEED')}
+                />
+              )}
+
+              {currentView === 'FEED' && (
+                <Feed
+                  posts={posts}
+                  users={users}
+                  comments={comments}
+                  ratingScale={ratingScale}
+                  savedPostIds={savedPostIds}
+                  repostedPostIds={repostedPostIds}
+                  onRate={handleFeedRate}
+                  onDetailedRate={(post) => handleRate({ type: 'post', data: post })}
+                  onProfileClick={handleProfileClick}
+                  onCommentClick={handleCommentClick}
+                  onShareClick={(post) => setActiveSharePostId(post.id)}
+                  onSaveClick={handleSaveClick}
+                  onRepostClick={handleRepostClick}
+                  onAnalyticsClick={setActiveInsightPost}
+                  currentUser={currentUser}
+                />
+              )}
+
+              {currentView === 'POST_DETAILS' && viewingPost && (
+                <Feed
+                  posts={[viewingPost]}
+                  users={users}
+                  comments={comments}
+                  ratingScale={ratingScale}
+                  onRate={handleFeedRate}
+                  onDetailedRate={(post) => handleRate({ type: 'post', data: post })}
+                  onProfileClick={handleProfileClick}
+                  onCommentClick={(post) => setActiveCommentPostId(post.id)}
+                  onShareClick={(post) => setActiveSharePostId(post.id)}
+                  onSaveClick={handleSavePost}
+                  onRepostClick={handleRepost}
+                  onAnalyticsClick={setActiveInsightPost}
+                  onBack={handleBack}
+                  currentUser={currentUser}
+                />
+              )}
+
+              {currentView === 'SEARCH' && (
+                <SearchView
+                  users={users}
+                  onProfileClick={handleProfileClick}
+                  onBack={handleBack}
+                />
+              )}
+
+              {currentView === 'CHATS' && (
+                <ChatsView
+                  users={users}
+                  notifications={notifications}
+                  posts={posts}
+                  chatList={chatList}
+                  messages={messages}
+                  setMessages={setMessages}
+                  setChatList={setChatList} // PASSED HERE
+                  onBack={handleBack}
+                  activeChatId={activeChatTarget}
+                  onOpenChat={(id) => setActiveChatTarget(id)}
+                  onProfileClick={handleProfileClick}
+                  onPostClick={handlePostClick}
+                  onNotificationClick={(n) => setViewingRatingSummary(n)}
+                  userResponse={dailyPollResponse}
+                  onRespond={(resp) => {
+                    // Handle Coin Reward Logic for Daily Poll
+                    if (!dailyPollResponse) {
+                      setDailyPollResponse(resp);
+                      awardCoins('me', 50, 'Daily Poll Answered');
+                    } else {
+                      setDailyPollResponse(resp);
+                    }
+                  }}
+                />
+              )}
+
+              {currentView === 'PROFILE' && (
+                <Profile
+                  user={viewingUser || currentUser}
+                  isOwnProfile={!viewingUser || viewingUser.id === currentUser.id}
+                  allPosts={posts}
+                  savedPosts={savedPosts}
+                  repostedPosts={viewingUser ? viewingUserReposts : repostedPosts}
+                  onRateUser={() => handleRate({ type: 'user', data: viewingUser || currentUser })}
+                  onBack={handleBack}
+                  onEditProfile={() => setIsEditingProfile(true)}
+                  onOpenSettings={() => setIsSettingsOpen(true)}
+                  onOpenStore={() => setIsStoreOpen(true)}
+                  onChat={() => {
+                    if (viewingUser) {
+                      setActiveChatTarget(viewingUser.id);
+                      handleNavigate('CHATS');
+                    } else {
+                      handleNavigate('CHATS');
+                    }
+                  }}
+                  onFollow={() => handleFollowUser((viewingUser || currentUser).id)}
+                  onFollowersClick={() => handleOpenUserList('FOLLOWERS', viewingUser || currentUser)}
+                  onFollowingClick={() => handleOpenUserList('FOLLOWING', viewingUser || currentUser)}
+                  onPostClick={handlePostClick}
+                  theme={themeMode}
+                  onToggleTheme={() => setThemeMode(prev => prev === 'dark' ? 'light' : 'dark')}
+                  viewerFriends={currentUser.friends}
+                />
+              )}
             </div>
 
-            <NavButton
-              active={currentView === 'CHATS'}
-              icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'CHATS' ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'CHATS' ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>}
-              onClick={() => handleNavigate('CHATS')}
-            />
+            {ratingTarget && (
+              <RatingModal
+                targetName={ratingTarget.type === 'user' ? (ratingTarget.data as User).displayName : 'this post'}
+                onClose={() => setRatingTarget(null)}
+                onSubmit={submitRating}
+              />
+            )}
 
-            <NavButton
-              active={currentView === 'PROFILE' && !viewingUserId}
-              icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'PROFILE' && !viewingUserId ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'PROFILE' && !viewingUserId ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>}
-              onClick={() => {
-                setViewingUserId(null);
-                handleNavigate('PROFILE');
-              }}
-            />
+            {isEditingProfile && (
+              <EditProfileModal
+                user={currentUser}
+                onClose={() => setIsEditingProfile(false)}
+                onSave={(updatedUser) => {
+                  setUsers(prev => prev.map(u => u.id === currentUser.id ? updatedUser : u));
+                }}
+              />
+            )}
+
+            {isSettingsOpen && (
+              <SettingsView
+                currentScale={ratingScale}
+                isPrivate={currentUser.isPrivate || false}
+                onScaleChange={setRatingScale}
+                onPrivacyChange={(val) => {
+                  setUsers(prev => prev.map(u => u.id === currentUser.id ? { ...u, isPrivate: val } : u));
+                }}
+                onClose={() => setIsSettingsOpen(false)}
+                currentTheme={appTheme}
+                onThemeChange={setAppTheme}
+                isDarkMode={themeMode === 'dark'}
+                onToggleDarkMode={() => setThemeMode(prev => prev === 'dark' ? 'light' : 'dark')}
+                onLogout={() => {
+                  setToastMessage("Logged out (Mock)");
+                  setIsSettingsOpen(false);
+                }}
+              />
+            )}
+
+            {activeCommentPostId && (
+              <CommentsSheet
+                comments={comments.filter(c => c.postId === activeCommentPostId)}
+                users={users}
+                onClose={() => setActiveCommentPostId(null)}
+                onAddComment={handleAddComment}
+                onLikeComment={handleLikeComment}
+                onUserClick={handleProfileClick}
+                likedCommentIds={likedCommentIds}
+              />
+            )}
+
+            {activeSharePostId && (
+              <ShareSheet
+                users={users}
+                onClose={() => setActiveSharePostId(null)}
+                onSend={handleShareSend}
+              />
+            )}
+
+            {userListTarget && (
+              <UserListSheet
+                type={userListTarget.type}
+                users={userListTarget.users}
+                onClose={() => setUserListTarget(null)}
+                onUserClick={handleProfileClick}
+              />
+            )}
+
+            {showNav && (
+              <div className="absolute bottom-0 w-full h-[60px] bg-theme-bg/95 backdrop-blur-md border-t border-theme-text/5 flex justify-around items-center px-6 z-40 pointer-events-auto">
+                <NavButton
+                  active={currentView === 'FEED'}
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'FEED' ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'FEED' ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25" /></svg>}
+                  onClick={() => handleNavigate('FEED')}
+                />
+
+                <NavButton
+                  active={currentView === 'SEARCH'}
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z" /></svg>}
+                  onClick={() => handleNavigate('SEARCH')}
+                />
+
+                <div className="relative top-0">
+                  <button
+                    className="w-10 h-10 rounded-full bg-brand-gradient shadow-soft-xl flex items-center justify-center text-white transform transition-transform active:scale-95 border border-white/20"
+                    onClick={triggerFileUpload}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor" className="w-5 h-5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
+                    </svg>
+                  </button>
+                </div>
+
+                <NavButton
+                  active={currentView === 'CHATS'}
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'CHATS' ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'CHATS' ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z" /></svg>}
+                  onClick={() => handleNavigate('CHATS')}
+                />
+
+                <NavButton
+                  active={currentView === 'PROFILE' && !viewingUserId}
+                  icon={<svg xmlns="http://www.w3.org/2000/svg" fill={currentView === 'PROFILE' && !viewingUserId ? "currentColor" : "none"} viewBox="0 0 24 24" strokeWidth={currentView === 'PROFILE' && !viewingUserId ? 0 : 2} stroke="currentColor" className="w-7 h-7"><path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" /></svg>}
+                  onClick={() => {
+                    setViewingUserId(null);
+                    handleNavigate('PROFILE');
+                  }}
+                />
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
     </div>
   );
 };

@@ -73,18 +73,60 @@ export const getUserPosts = async (userId: string): Promise<Post[]> => {
 };
 
 /**
+ * Get posts reposted by a specific user
+ */
+export const getUserReposts = async (userId: string): Promise<Post[]> => {
+    console.log('[DEBUG] getUserReposts v2 called for user:', userId);
+    try {
+        // 1. Get reposted post IDs
+        const { data: reposts, error: repostError } = await supabase
+            .from('reposts')
+            .select('post_id')
+            .eq('user_id', userId)
+            .order('created_at', { ascending: false });
+
+        if (repostError) throw repostError;
+
+        // Deduplicate IDs to avoid "unique key" errors in React
+        const postIds = Array.from(new Set(reposts.map(r => r.post_id)));
+
+        if (postIds.length === 0) return [];
+
+        // 2. Fetch the actual posts
+        const { data: posts, error: postsError } = await supabase
+            .from('posts')
+            .select('*')
+            .in('id', postIds);
+
+        if (postsError) throw postsError;
+
+        // 3. Map to Post objects and preserve order
+        const postsMap = new Map(posts.map(p => [p.id, p]));
+        return postIds
+            .map(id => postsMap.get(id))
+            .filter(p => p !== undefined)
+            .map(mapDbPostToPost);
+    } catch (error) {
+        console.error('Error fetching user reposts:', error);
+        return [];
+    }
+};
+
+/**
  * Get a single post by ID
  */
 export const getPostById = async (postId: string): Promise<Post | null> => {
     try {
-        const { data, error } = await supabase
+        // 1. Get Post Data
+        const { data: post, error: postError } = await supabase
             .from('posts')
             .select('*')
             .eq('id', postId)
             .single();
 
-        if (error) throw error;
-        return mapDbPostToPost(data);
+        if (postError) throw postError;
+
+        return mapDbPostToPost(post);
     } catch (error) {
         console.error('Error fetching post:', error);
         return null;
@@ -150,7 +192,8 @@ function mapDbPostToPost(dbPost: any): Post {
         caption: dbPost.caption || '',
         averageRating: parseFloat(dbPost.average_rating) || 0,
         ratingCount: dbPost.rating_count || 0,
-        saveCount: dbPost.save_count || 0,
-        repostCount: dbPost.repost_count || 0,
+        saveCount: dbPost.saves_count || 0,
+        repostCount: dbPost.reposts_count || 0,
+        commentsCount: dbPost.comments_count || 0,
     };
 }

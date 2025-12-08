@@ -30,12 +30,12 @@ export interface User {
   bio: string;
   age?: number;
   nation?: string;
-  
+
   // Stats
   coins: number; // Formerly Reputation
   averageScore: number;
   totalRatings: number;
-  
+
   // Social Graph
   followersCount: number;
   followingCount: number;
@@ -63,6 +63,7 @@ export interface Post {
   ratingCount: number;
   saveCount: number;   // New field
   repostCount: number; // New field
+  commentsCount: number; // New field
 }
 
 export interface ChatMessage {
@@ -72,7 +73,7 @@ export interface ChatMessage {
   timestamp: number;
   isOwn?: boolean;
   type?: 'text' | 'post' | 'image'; // Added 'image'
-  postId?: string; 
+  postId?: string;
   mediaUrl?: string; // For images sent in chat
   replyTo?: {
     id: string;
@@ -94,22 +95,22 @@ export interface Comment {
   postId: string;
   userId: string;
   text: string;
-  timestamp: number;
+  createdAt: string; // ISO String from Supabase
   likes: number;
 }
 
 export interface Notification {
   id: string;
-  type: 'RATING' | 'DESCRIBED'; // Added DESCRIBED
+  type: 'RATING' | 'DESCRIBED' | 'SAVED' | 'REPOSTED' | 'COMMENT' | 'REPLY'; // Added COMMENT and REPLY
   raterId: string; // Always present now (No anonymous)
-  raterName: string; 
+  raterName: string;
   score: number;
   emoji: string;
   timestamp: number;
   postMediaUrl?: string; // Optional: if it was a post rating
   postId?: string;
   // NEW: Store the specific breakdown for this notification
-  badgeScores?: Record<BadgeType, number>; 
+  badgeScores?: Record<BadgeType, number>;
 }
 
 export type AppTheme = 'NEON' | 'EMERALD' | 'SUNSET' | 'LAVENDER' | 'MONO';

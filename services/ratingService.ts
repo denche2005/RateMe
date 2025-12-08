@@ -17,26 +17,28 @@ export const createRating = async (params: CreateRatingParams): Promise<{ succes
     try {
         const { raterId, targetId, targetType, value, badges } = params;
 
-        // Insert rating
+        // Use UPSERT: if rating exists, UPDATE it; otherwise INSERT
         const { data, error } = await supabase
             .from('ratings')
-            .insert({
+            .upsert({
                 rater_id: raterId,
                 target_id: targetId,
                 target_type: targetType,
                 value,
                 badges: badges || null,
+            }, {
+                onConflict: 'rater_id,target_id,target_type', // UNIQUE constraint columns
+                ignoreDuplicates: false // Always update if exists
             })
             .select()
             .single();
 
         if (error) {
-            // Check if it's a duplicate rating error
-            if (error.code === '23505') {
-                return { success: false, error: 'You have already rated this user/post recently' };
-            }
-            throw error;
+            console.error('Error creating/updating rating:', error);
+            return { success: false, error: error.message };
         }
+
+        console.log('[RATING] Created/Updated successfully');
 
         // If rating a post, update post stats
         if (targetType === 'post') {

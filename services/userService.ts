@@ -58,6 +58,27 @@ export const searchUsers = async (query: string): Promise<User[]> => {
 };
 
 /**
+ * Get all users (for global search and user discovery)
+ * Limit to 100 most recent users to avoid performance issues
+ */
+export const getAllUsers = async (): Promise<User[]> => {
+    try {
+        const { data, error } = await supabase
+            .from('profiles')
+            .select('*')
+            .order('created_at', { ascending: false })
+            .limit(100);
+
+        if (error) throw error;
+        console.log('[USER_SERVICE] Loaded', data.length, 'users from Supabase');
+        return data.map(mapDbUserToUser);
+    } catch (error) {
+        console.error('Error fetching all users:', error);
+        return [];
+    }
+};
+
+/**
  * Update user profile
  */
 export const updateUserProfile = async (userId: string, updates: Partial<User>): Promise<boolean> => {

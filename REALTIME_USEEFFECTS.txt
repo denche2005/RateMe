@@ -1,0 +1,43 @@
+// Real-time notifications subscription
+useEffect(() => {
+  if (authenticatedUser) {
+    const unsubscribe = subscribeToNotifications(
+      authenticatedUser.id,
+      (notification) => {
+        console.log('[APP] New notification received:', notification);
+        
+        // Show toast message
+        const message = notification.type === 'RATING' 
+          ? `${notification.emoji} ${notification.raterName} rated your post!`
+          : `${notification.emoji} ${notification.raterName} described you!`;
+        
+        setToastMessage(message);
+        
+        // Add to notifications list
+        setNotifications(prev => [notification, ...prev]);
+      }
+    );
+    
+    return unsubscribe;
+  }
+}, [authenticatedUser]);
+
+// Real-time profile updates subscription (for badge averages)
+useEffect(() => {
+  if (authenticatedUser) {
+    const unsubscribe = subscribeToProfileUpdates(
+      authenticatedUser.id,
+      async (updatedProfile) => {
+        console.log('[APP] Profile updated via realtime:', updatedProfile.badge_averages);
+        
+        // Reload full user data
+        const updatedUser = await getUserById(authenticatedUser.id);
+        if (updatedUser) {
+          setUsers(prev => prev.map(u => u.id === authenticatedUser.id ? updatedUser : u));
+        }
+      }
+    );
+    
+    return unsubscribe;
+  }
+}, [authenticatedUser]);

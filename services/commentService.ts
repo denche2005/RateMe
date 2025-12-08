@@ -2,29 +2,33 @@ import { supabase } from './supabaseClient';
 import { Comment } from '../types';
 
 /**
- * Create a comment on a post
+ * Create a new comment
  */
-export const createComment = async (params: {
-    postId: string;
-    userId: string;
-    text: string;
-}): Promise<{ success: boolean; comment?: Comment; error?: string }> => {
+export const createComment = async (postId: string, userId: string, text: string): Promise<Comment | null> => {
     try {
         const { data, error } = await supabase
             .from('comments')
             .insert({
-                post_id: params.postId,
-                user_id: params.userId,
-                text: params.text,
+                post_id: postId,
+                user_id: userId,
+                text: text
             })
             .select()
             .single();
 
         if (error) throw error;
-        return { success: true, comment: mapDbCommentToComment(data) };
+
+        return {
+            id: data.id,
+            postId: data.post_id,
+            userId: data.user_id,
+            text: data.text,
+            likes: data.likes_count || 0,
+            createdAt: data.created_at
+        };
     } catch (error) {
         console.error('Error creating comment:', error);
-        return { success: false, error: 'Failed to create comment' };
+        return null;
     }
 };
 
@@ -37,10 +41,18 @@ export const getPostComments = async (postId: string): Promise<Comment[]> => {
             .from('comments')
             .select('*')
             .eq('post_id', postId)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: true });
 
         if (error) throw error;
-        return (data || []).map(mapDbCommentToComment);
+
+        return (data || []).map(c => ({
+            id: c.id,
+            postId: c.post_id,
+            userId: c.user_id,
+            text: c.text,
+            likes: c.likes_count || 0,
+            createdAt: c.created_at
+        }));
     } catch (error) {
         console.error('Error fetching comments:', error);
         return [];
@@ -48,45 +60,14 @@ export const getPostComments = async (postId: string): Promise<Comment[]> => {
 };
 
 /**
- * Toggle like on a comment
- */
-export const toggleCommentLike = async (commentId: string, userId: string, isLiked: boolean): Promise<boolean> => {
-    try {
-        // Simple increment/decrement for MVP
-        // In production, you'd want a separate 'comment_likes' table
-        const { data: comment } = await supabase
-            .from('comments')
-            .select('likes')
-            .eq('id', commentId)
-            .single();
-
-        if (!comment) return false;
-
-        const newLikes = isLiked ? comment.likes - 1 : comment.likes + 1;
-
-        const { error } = await supabase
-            .from('comments')
-            .update({ likes: Math.max(0, newLikes) })
-            .eq('id', commentId);
-
-        if (error) throw error;
-        return true;
-    } catch (error) {
-        console.error('Error toggling comment like:', error);
-        return false;
-    }
-};
-
-/**
  * Delete a comment
  */
-export const deleteComment = async (commentId: string, userId: string): Promise<boolean> => {
+export const deleteComment = async (commentId: string): Promise<boolean> => {
     try {
         const { error } = await supabase
             .from('comments')
             .delete()
-            .eq('id', commentId)
-            .eq('user_id', userId);
+            .eq('id', commentId);
 
         if (error) throw error;
         return true;
@@ -96,14 +77,64 @@ export const deleteComment = async (commentId: string, userId: string): Promise<
     }
 };
 
-// Helper to map database comment to app Comment type
-function mapDbCommentToComment(dbComment: any): Comment {
-    return {
-        id: dbComment.id,
-        postId: dbComment.post_id,
-        userId: dbComment.user_id,
-        text: dbComment.text,
-        timestamp: new Date(dbComment.created_at).getTime(),
-        likes: dbComment.likes || 0,
-    };
-}
+/**
+ * Toggle like on a comment
+ */
+export const toggleCommentLike = async (commentId: string, userId: string): Promise<boolean> => {
+    try {
+        // Check if already liked
+        const { data: existing } = await supabase
+            .from('comment_likes')
+            .select('id')
+            .eq('comment_id', commentId)
+            .eq('user_id', userId)
+            .maybeSingle();
+
+        if (existing) {
+            // Unlike
+            const { error } = await supabase
+                .from('comment_likes')
+                .delete()
+                .eq('comment_id', commentId)
+                .eq('user_id', userId);
+
+            if (error) throw error;
+            return false;
+        } else {
+            // Like
+            const { error } = await supabase
+                .from('comment_likes')
+                .insert({
+                    comment_id: commentId,
+                    user_id: userId
+                });
+
+            if (error) throw error;
+            return true;
+        }
+    } catch (error) {
+        console.error('Error toggling comment like:', error);
+        return false;
+    }
+};
+
+/**
+ * Get IDs of comments liked by user
+ */
+export const getUserLikedComments = async (userId: string, postCommentIds: string[]): Promise<string[]> => {
+    try {
+        if (postCommentIds.length === 0) return [];
+
+        const { data, error } = await supabase
+            .from('comment_likes')
+            .select('comment_id')
+            .eq('user_id', userId)
+            .in('comment_id', postCommentIds);
+
+        if (error) throw error;
+        return data.map(l => l.comment_id);
+    } catch (error) {
+        console.error('Error fetching liked comments:', error);
+        return [];
+    }
+};

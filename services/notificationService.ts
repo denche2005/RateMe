@@ -6,17 +6,38 @@ import { Notification, BadgeType } from '../types';
  */
 export const createNotification = async (notification: Omit<Notification, 'id' | 'timestamp'>): Promise<boolean> => {
     try {
-        // Determine target user based on notification type
-        let targetUserId: string;
+        let targetUserId: string | null = null;
 
-        if (notification.type === 'RATING' || notification.type === 'DESCRIBED') {
-            // For ratings/describes, target is the post/profile owner (not the rater)
-            // We need to get this from the post or user being rated
-            // For now, we'll skip creating the notification if we can't determine target
-            console.warn('Notification target user not provided');
+        // CASO 1: Rating/Save/Repost/Comment/Reply de POST - obtener creator del post o targetUserId
+        if ((notification.type === 'RATING' || notification.type === 'SAVED' || notification.type === 'REPOSTED' || notification.type === 'COMMENT' || notification.type === 'REPLY') && notification.postId) {
+            // Si es REPLY, usar targetUserId explícito (para menciones)
+            if (notification.type === 'REPLY' && (notification as any).targetUserId) {
+                targetUserId = (notification as any).targetUserId;
+            } else {
+                // Sino, obtener el creator del post
+                const { data: post, error: postError } = await supabase
+                    .from('posts')
+                    .select('creator_id')
+                    .eq('id', notification.postId)
+                    .single();
+
+                if (postError || !post) {
+                    console.error('Post not found for notification:', notification.postId);
+                    return false;
+                }
+
+                targetUserId = post.creator_id;
+            }
+        }
+
+        // CASO 2: Describe Me - usar targetUserId explícito
+        else if (notification.type === 'DESCRIBED' && (notification as any).targetUserId) {
+            targetUserId = (notification as any).targetUserId;
+        }
+
+        if (!targetUserId) {
+            console.error('Cannot determine target user for notification');
             return false;
-        } else {
-            targetUserId = notification.raterId; // Fallback
         }
 
         const notif = {
@@ -36,6 +57,8 @@ export const createNotification = async (notification: Omit<Notification, 'id' |
             .insert(notif);
 
         if (error) throw error;
+
+        console.log('[NOTIFICATION] Created successfully for user:', targetUserId);
         return true;
     } catch (error) {
         console.error('Error creating notification:', error);
@@ -131,7 +154,7 @@ export const getUnreadCount = async (userId: string): Promise<number> => {
 function mapDbNotificationToNotification(dbNotif: any): Notification {
     return {
         id: dbNotif.id,
-        type: dbNotif.type as 'RATING' | 'DESCRIBED',
+        type: dbNotif.type as 'RATING' | 'DESCRIBED' | 'SAVED' | 'REPOSTED' | 'COMMENT' | 'REPLY',
         raterId: dbNotif.rater_id,
         raterName: dbNotif.rater_name,
         score: parseFloat(dbNotif.score) || 0,

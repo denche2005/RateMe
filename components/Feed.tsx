@@ -8,6 +8,8 @@ interface FeedProps {
   users: User[];
   comments: Comment[];
   ratingScale: 5 | 10 | 100;
+  savedPostIds?: string[];
+  repostedPostIds?: string[];
   onRate: (post: Post, score: number) => void;
   onDetailedRate: (post: Post) => void;
   onProfileClick: (user: User) => void;
@@ -25,6 +27,8 @@ interface FeedPostProps {
   user: User;
   commentCount: number;
   maxScore: number;
+  isSaved?: boolean;
+  isReposted?: boolean;
   onRate: (score: number) => void;
   onDetailedRate: () => void;
   onProfileClick: () => void;
@@ -58,6 +62,8 @@ const FeedPost: React.FC<FeedPostProps> = ({
   user,
   commentCount,
   maxScore,
+  isSaved = false,
+  isReposted = false,
   onRate,
   onDetailedRate,
   onProfileClick,
@@ -70,19 +76,7 @@ const FeedPost: React.FC<FeedPostProps> = ({
 }) => {
   const [sliderValue, setSliderValue] = useState(maxScore / 2);
 
-  const [isSaved, setIsSaved] = useState(false);
-  const [isReposted, setIsReposted] = useState(false);
-  const [localSaveCount, setLocalSaveCount] = useState(post.saveCount || 0);
-  const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
-
   const isOwnPost = currentUser && currentUser.id === post.creatorId;
-
-  useEffect(() => {
-    if (currentUser) {
-      setIsSaved(currentUser.savedPostIds?.includes(post.id) || false);
-      setIsReposted(currentUser.repostedPostIds?.includes(post.id) || false);
-    }
-  }, [currentUser, post.id]);
 
   const [isRepostAnimating, setIsRepostAnimating] = useState(false);
   const [flash, setFlash] = useState<{ visible: boolean, score: number, emoji: string, left: number } | null>(null);
@@ -113,22 +107,14 @@ const FeedPost: React.FC<FeedPostProps> = ({
 
   const handleSaveAction = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const newState = !isSaved;
-    setIsSaved(newState);
-    setLocalSaveCount(prev => newState ? prev + 1 : prev - 1);
     onSaveClick();
   };
 
   const handleRepostAction = (e: React.MouseEvent) => {
     e.stopPropagation();
-    const newState = !isReposted;
-    setIsReposted(newState);
-    if (newState) {
+    if (!isReposted) {
       setIsRepostAnimating(true);
       setTimeout(() => setIsRepostAnimating(false), 600);
-      setLocalRepostCount(prev => prev + 1);
-    } else {
-      setLocalRepostCount(prev => prev - 1);
     }
     onRepostClick();
   };
@@ -294,7 +280,7 @@ const FeedPost: React.FC<FeedPostProps> = ({
                     <path fillRule="evenodd" d="M6.32 2.577a49.255 49.255 0 0111.36 0c1.497.174 2.57 1.46 2.57 2.93V21a.75.75 0 01-1.085.67L12 18.089l-7.165 3.583A.75.75 0 013.75 21V5.507c0-1.47 1.073-2.756 2.57-2.93z" clipRule="evenodd" />
                   </svg>
                 </div>
-                <span className="text-[10px] font-bold text-white drop-shadow-md">{localSaveCount}</span>
+                <span className="text-[10px] font-bold text-white drop-shadow-md">{post.saveCount || 0}</span>
               </div>
 
               <div className="flex flex-col items-center gap-1 cursor-pointer active:scale-95 transition-transform group" onClick={handleRepostAction}>
@@ -306,7 +292,7 @@ const FeedPost: React.FC<FeedPostProps> = ({
                     <path d="M21 13v2a4 4 0 0 1-4 4H3"></path>
                   </svg>
                 </div>
-                <span className="text-[10px] font-bold text-white drop-shadow-md">{localRepostCount}</span>
+                <span className="text-[10px] font-bold text-white drop-shadow-md">{post.repostCount || 0}</span>
               </div>
 
               <div className="flex flex-col items-center gap-1 cursor-pointer active:scale-95 transition-transform group" onClick={(e) => { e.stopPropagation(); onShareClick(); }}>
@@ -332,6 +318,8 @@ export const Feed: React.FC<FeedProps> = ({
   users,
   comments,
   ratingScale,
+  savedPostIds = [],
+  repostedPostIds = [],
   onRate,
   onDetailedRate,
   onProfileClick,
@@ -384,8 +372,10 @@ export const Feed: React.FC<FeedProps> = ({
               <FeedPost
                 post={post}
                 user={user}
-                commentCount={postComments.length}
+                commentCount={post.commentsCount || 0}
                 maxScore={ratingScale}
+                isSaved={savedPostIds.includes(post.id)}
+                isReposted={repostedPostIds.includes(post.id)}
                 onRate={(score) => handlePostRate(index, post, score)}
                 onDetailedRate={() => onDetailedRate(post)}
                 onProfileClick={() => onProfileClick(user)}

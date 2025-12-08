@@ -1432,13 +1432,8 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
                   users={users}
                   notifications={notifications}
                   posts={posts}
-                  chatList={chatList}
-                  messages={messages}
-                  setMessages={setMessages}
-                  setChatList={setChatList} // PASSED HERE
+                  currentUserId={currentUserId}
                   onBack={handleBack}
-                  activeChatId={activeChatTarget}
-                  onOpenChat={(id) => setActiveChatTarget(id)}
                   onProfileClick={handleProfileClick}
                   onPostClick={handlePostClick}
                   onNotificationClick={(n) => setViewingRatingSummary(n)}

@@ -61,8 +61,8 @@ export const getUserConversations = async (
             .from('conversations')
             .select(`
                 *,
-                user1:users!conversations_user1_id_fkey(id, username, display_name, avatar_url),
-                user2:users!conversations_user2_id_fkey(id, username, display_name, avatar_url)
+                user1:profiles!conversations_user1_id_fkey(id, username, display_name, avatar_url),
+                user2:profiles!conversations_user2_id_fkey(id, username, display_name, avatar_url)
             `)
             .or(`user1_id.eq.${userId},user2_id.eq.${userId}`)
             .order('last_message_at', { ascending: false });
@@ -215,7 +215,7 @@ export const searchUsers = async (
         if (!query.trim()) return [];
 
         const { data: users, error } = await supabase
-            .from('users')
+            .from('profiles')
             .select('id, username, display_name, avatar_url')
             .neq('id', currentUserId)
             .or(`username.ilike.%${query}%,display_name.ilike.%${query}%`)

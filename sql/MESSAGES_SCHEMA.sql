@@ -4,8 +4,8 @@
 -- 1. Conversations table (stores 1-on-1 conversations)
 CREATE TABLE IF NOT EXISTS public.conversations (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user1_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
-    user2_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    user1_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
+    user2_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     last_message_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS public.conversations (
 CREATE TABLE IF NOT EXISTS public.messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     conversation_id UUID NOT NULL REFERENCES public.conversations(id) ON DELETE CASCADE,
-    sender_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
+    sender_id UUID NOT NULL REFERENCES public.profiles(id) ON DELETE CASCADE,
     text TEXT NOT NULL,
     is_read BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

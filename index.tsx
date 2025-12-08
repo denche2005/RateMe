@@ -1433,6 +1433,7 @@ const App = ({ authenticatedUser }: { authenticatedUser: User | null }) => {
                   notifications={notifications}
                   posts={posts}
                   currentUserId={currentUserId}
+                  currentUser={currentUser}
                   onBack={handleBack}
                   onProfileClick={handleProfileClick}
                   onPostClick={handlePostClick}

@@ -579,7 +579,7 @@ export const ChatsView: React.FC<Props> = ({
             )}
 
             {/* Responses - Horizontal Scroll */}
-            <div className="flex gap-4 overflow-x-auto pb-2 scrollbar-hide">
+            <div className="flex gap-4 overflow-x-auto pb-4 pt-20 px-2 scrollbar-hide -mx-2">
               {/* Current User First */}
               <div className="flex-shrink-0 w-24">
                 <div className="relative flex flex-col items-center">
@@ -587,9 +587,9 @@ export const ChatsView: React.FC<Props> = ({
                   {myResponse ? (
                     <div
                       onClick={() => setShowPollModal(true)}
-                      className={`absolute bottom-full mb-2 px-3 py-2 rounded-2xl text-xs text-white font-medium cursor-pointer hover:scale-105 transition-transform min-w-[100px] max-w-[140px] ${myResponse.response_type === 'VOTE_A' ? 'bg-blue-500' :
-                        myResponse.response_type === 'VOTE_B' ? 'bg-red-500' :
-                          'bg-purple-500'
+                      className={`absolute bottom-full mb-3 px-4 py-2 rounded-[20px] text-xs font-medium cursor-pointer hover:scale-105 transition-all shadow-lg min-w-[90px] max-w-[130px] z-10 ${myResponse.response_type === 'VOTE_A' ? 'bg-blue-500 text-white' :
+                        myResponse.response_type === 'VOTE_B' ? 'bg-red-500 text-white' :
+                          'bg-zinc-800 text-gray-100 border border-zinc-700'
                         }`}
                     >
                       {/* Text */}
@@ -613,10 +613,10 @@ export const ChatsView: React.FC<Props> = ({
                         </div>
                       )}
 
-                      {/* Triangle pointer */}
-                      <div className={`absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-8 border-transparent ${myResponse.response_type === 'VOTE_A' ? 'border-t-blue-500' :
-                        myResponse.response_type === 'VOTE_B' ? 'border-t-red-500' :
-                          'border-t-purple-500'
+                      {/* Small Bubble Pointer (Instagram Style) */}
+                      <div className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 ${myResponse.response_type === 'VOTE_A' ? 'bg-blue-500' :
+                        myResponse.response_type === 'VOTE_B' ? 'bg-red-500' :
+                          'bg-zinc-800 border-b border-r border-zinc-700'
                         }`} />
                     </div>
                   ) : (
@@ -629,11 +629,15 @@ export const ChatsView: React.FC<Props> = ({
                     </div>
                   )}
 
-                  {/* Avatar */}
-                  <button onClick={() => setShowPollModal(true)} className="relative">
-                    <Avatar url={currentUser.avatarUrl} size="md" border />
+                  {/* Avatar with Ring */}
+                  <button onClick={() => setShowPollModal(true)} className="relative p-1">
+                    <div className={`rounded-full p-[2px] ${myResponse ? 'bg-gradient-to-tr from-theme-accent to-purple-500' : 'bg-theme-divider'}`}>
+                      <div className="bg-theme-bg rounded-full p-[2px]">
+                        <Avatar url={currentUser.avatarUrl} size="md" />
+                      </div>
+                    </div>
                     {!myResponse && (
-                      <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-theme-accent rounded-full flex items-center justify-center text-xs border-2 border-theme-bg">
+                      <div className="absolute bottom-0 right-0 w-5 h-5 bg-theme-accent rounded-full flex items-center justify-center text-xs text-white border-2 border-theme-bg shadow-sm">
                         +
                       </div>
                     )}
@@ -649,9 +653,9 @@ export const ChatsView: React.FC<Props> = ({
                     {/* Speech Bubble */}
                     <div
                       onClick={() => handleResponseClick(response)}
-                      className={`absolute bottom-full mb-2 px-3 py-2 rounded-2xl text-xs text-white font-medium cursor-pointer hover:scale-105 transition-transform min-w-[100px] max-w-[140px] ${response.response_type === 'VOTE_A' ? 'bg-blue-500' :
-                        response.response_type === 'VOTE_B' ? 'bg-red-500' :
-                          'bg-purple-500'
+                      className={`absolute bottom-full mb-3 px-4 py-2 rounded-[20px] text-xs font-medium cursor-pointer hover:scale-105 transition-all shadow-lg min-w-[90px] max-w-[130px] z-10 ${response.response_type === 'VOTE_A' ? 'bg-blue-500 text-white' :
+                        response.response_type === 'VOTE_B' ? 'bg-red-500 text-white' :
+                          'bg-zinc-800 text-gray-100 border border-zinc-700'
                         }`}
                     >
                       {/* Text */}
@@ -675,16 +679,20 @@ export const ChatsView: React.FC<Props> = ({
                         </div>
                       )}
 
-                      {/* Triangle pointer */}
-                      <div className={`absolute top-full left-1/2 -translate-x-1/2 w-0 h-0 border-l-4 border-r-4 border-t-8 border-transparent ${response.response_type === 'VOTE_A' ? 'border-t-blue-500' :
-                        response.response_type === 'VOTE_B' ? 'border-t-red-500' :
-                          'border-t-purple-500'
+                      {/* Small Bubble Pointer (Instagram Style) */}
+                      <div className={`absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-3 rotate-45 ${response.response_type === 'VOTE_A' ? 'bg-blue-500' :
+                        response.response_type === 'VOTE_B' ? 'bg-red-500' :
+                          'bg-zinc-800 border-b border-r border-zinc-700'
                         }`} />
                     </div>
 
-                    {/* Avatar */}
-                    <button onClick={() => handleResponseClick(response)}>
-                      <Avatar url={response.user_avatar || ''} size="md" border />
+                    {/* Avatar with Ring */}
+                    <button onClick={() => handleResponseClick(response)} className="relative p-1">
+                      <div className="rounded-full p-[2px] bg-gradient-to-tr from-theme-accent to-purple-500">
+                        <div className="bg-theme-bg rounded-full p-[2px]">
+                          <Avatar url={response.user_avatar || ''} size="md" />
+                        </div>
+                      </div>
                     </button>
                     <p className="text-xs text-theme-secondary text-center mt-1 truncate w-full">
                       {response.user_name?.split(' ')[0]}
